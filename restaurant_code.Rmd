@@ -1,0 +1,171 @@
+---
+title: "bolt_task"
+author: "Md Faruk Hasan"
+date: "2023-03-28"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(cluster)
+library(janitor)
+library(tidyverse)
+library(reshape)
+library(patchwork)
+library(gridExtra)
+library(ggcorrplot)
+library(factoextra)
+```
+
+Exploratory Data Analysis [Summary & Box plot]
+
+```{r}
+# load the data
+data <- read.csv("D:/User/Documents/bolttask.csv", header= T)
+
+df <- data %>% clean_names()
+
+# select important variables for EDA
+important_vars <- c("gmv_gross_merchandise_value_eur", "total_sales_before_discount_eur", "commission_eur", "net_rate", "requested_orders", "total_number_of_delivered_orders", "monthly_active_users", "new_users", "menu_conversion", "availability_rate", "menu_photo_coverage", "restaurant_average_rates", "restaurant_total_rates", "restaurant_avergae_cooking_time")
+
+# filter out rows with missing values
+df_complete <- df[complete.cases(df), ]
+
+
+
+# summarize the variables using descriptive statistics
+summary_data <- df_complete %>% 
+  select(all_of(important_vars)) %>% 
+  summary()
+
+# visualize the distribution of each variable using box plots
+boxplot_data <- df_complete %>% 
+  select(all_of(important_vars)) %>% 
+  gather(key="variable", value="value") %>% 
+  ggplot(aes(x=variable, y=value)) + geom_boxplot() + coord_flip() + labs(title="Distribution of Important Variables", x="", y="")
+
+df1 <- subset(df, select = -c(restaurant_id,restaurant_first_active_date) )
+
+df1 %>% 
+  diagnose_numeric() %>% 
+  flextable() %>% theme_zebra() %>% colformat_double(digits = 2)
+
+summary_data
+boxplot_data
+```
+
+How every variable is distributed
+
+```{r}
+# Define variables
+variables <- c("gmv_gross_merchandise_value_eur", 
+               "total_sales_before_discount_eur", 
+               "commission_eur", 
+               "net_rate", 
+               "requested_orders", 
+               "total_number_of_delivered_orders", 
+               "monthly_active_users", 
+               "new_users", 
+               "menu_conversion", 
+               "availability_rate", 
+               "menu_photo_coverage", 
+               "restaurant_average_rates", 
+               "restaurant_total_rates", 
+               "restaurant_avergae_cooking_time")
+
+# Loop through each variable
+plots <- list()
+for (var in variables) {
+  
+  # Generate plot
+  plot <- ggplot(df, aes_string(x=var)) +
+    geom_histogram() +
+    labs(x = var, y = "Frequency", title = paste("Distribution of", var)) 
+  
+  # Add to list of plots
+  plots[[var]] <- plot
+}
+
+# Combine plots into one grid
+grid.arrange(grobs = plots, ncol = 3)
+```
+
+Pairwise Correlation to detect the major variables
+
+
+```{r}
+
+df <- na.omit(df)
+
+# select variables for correlation plot
+corr_vars <- c("gmv_gross_merchandise_value_eur", "total_sales_before_discount_eur", "commission_eur", "net_rate", "requested_orders", "total_number_of_delivered_orders", "monthly_active_users", "new_users", "menu_conversion", "availability_rate", "menu_photo_coverage", "restaurant_average_rates", "restaurant_total_rates", "restaurant_avergae_cooking_time")
+
+# create correlation matrix
+corr_matrix <- cor(df[, corr_vars])
+
+# create pairwise correlation plot
+ggcorrplot(corr_matrix, 
+           hc.order = TRUE, 
+           type = "lower", 
+           lab = TRUE, 
+           lab_size = 2, 
+           method="circle", 
+           colors = c("#6D9EC1", "white", "#E46726"))
+```
+
+
+K-Means Clustering method to segment the providers
+
+```{r}
+
+# Select variables to include in clustering analysis
+variables <- c("gmv_gross_merchandise_value_eur", "total_sales_before_discount_eur", "commission_eur","total_number_of_delivered_orders", "requested_orders","monthly_active_users","new_users")
+
+# Normalize variables to put them on the same scale
+data_norm <- as.data.frame(scale(df[,variables]))
+
+# Determine optimal number of clusters using silhouette method
+sil_width <- c(NA)
+for(i in 2:10) {
+  kmeans_fit <- kmeans(data_norm, centers = i, nstart = 25)
+  ss <- silhouette(kmeans_fit$cluster, dist(data_norm))
+  sil_width[i] <- mean(ss[, 3])
+}
+plot(1:10, sil_width, type = "b", xlab = "Number of clusters", ylab = "Silhouette Width")
+
+# Based on the plot, we choose 2 clusters as the optimal number of clusters
+
+# Run K-means clustering with 2 clusters
+kmeans_fit <- kmeans(data_norm, centers = 2, nstart = 25)
+
+# Assign each provider to a segment based on their cluster membership
+df$segment <- as.factor(kmeans_fit$cluster)
+
+# Summarize the characteristics of each segment
+segment_summary <- df %>%
+  group_by(segment) %>%
+  summarize(n_providers = n(),
+            avg_GMV = mean(gmv_gross_merchandise_value_eur),
+            avg_sales = mean(total_sales_before_discount_eur),
+            avg_commission = mean(commission_eur),
+            avg__number_of_delivered_orders= mean(total_number_of_delivered_orders),
+            avg_requested_orders = mean(requested_orders),
+            avg_monthly_active_users= mean(monthly_active_users),
+            avg_new_users = mean(new_users))
+
+# Print the segment summary
+print(segment_summary)
+
+# Identify the high-value restaurants (i.e., those in the top quartile of GMV)
+high_value <- df %>%
+  filter(segment == "1") %>%
+  filter(gmv_gross_merchandise_value_eur > quantile(df$gmv_gross_merchandise_value_eur, 0.75))
+
+# Print the list of high-value restaurants
+print(high_value$restaurant_id)
+
+write.csv(high_value$restaurant_id,"hv.csv")
+```
+
